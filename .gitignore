@@ -1,0 +1,21 @@
+# VM Artifacts
+*.qcow2
+*.img
+*.iso
+*.vdi
+*.vhd
+*.vhdx
+
+# VM XML definitions
+loonaro/vms/
+
+# Logs
+*.log
+
+# Temp
+tmp/
+.DS_Store
+
+# Secrets
+*.pem
+*.key
