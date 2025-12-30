@@ -56,9 +56,8 @@ DISK_SIZE="64G"
 
 # Check if VM checks out
 if sudo virsh list --all | grep -q "$VM_NAME"; then
-    echo "Error: VM '$VM_NAME' already exists."
-    exit 1
-fi
+    echo "Using existing VM '$VM_NAME'..."
+else
 
 mkdir -p "$VMS_DIR"
 
@@ -130,5 +129,24 @@ sudo chown libvirt-qemu:kvm "$NVRAM_PATH" 2>/dev/null || true
 # Define in Libvirt
 echo "Defining VM in Libvirt..."
 sudo virsh define "$XML_PATH"
+fi
 
-echo "Done! Start your VM with: sudo virsh start $VM_NAME"
+# LibVMI JSON Profile - symlink into vms/ for easy access
+TEMPLATE_JSON="$TEMPLATES_DIR/${TEMPLATE_ARG}.json"
+VM_JSON="$VMS_DIR/${VM_NAME}.json"
+
+if [ -f "$TEMPLATE_JSON" ]; then
+    # create symlink so apps can use -j vms/<vm>.json
+    if [ ! -L "$VM_JSON" ]; then
+        ln -sf "$TEMPLATE_JSON" "$VM_JSON"
+        echo "JSON profile linked: $VM_JSON → $TEMPLATE_JSON"
+    fi
+else
+    echo "Warning: No JSON profile at $TEMPLATE_JSON. Create with pdbconv.py (see README)."
+fi
+
+echo "Done! Start VM: sudo $SCRIPT_DIR/start.sh $VM_NAME"
+echo "Introspection: -j $VM_JSON"
+
+
+

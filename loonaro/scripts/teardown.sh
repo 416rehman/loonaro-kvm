@@ -40,4 +40,11 @@ else
     echo "  XML definition not found: $XML_PATH"
 fi
 
+# Remove JSON symlink
+VM_JSON="$VMS_DIR/${VM_NAME}.json"
+if [ -L "$VM_JSON" ]; then
+    rm -f "$VM_JSON"
+    echo "  Removed JSON symlink: $VM_JSON"
+fi
+
 echo "Teardown complete for $VM_NAME"

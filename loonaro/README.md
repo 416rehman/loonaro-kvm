@@ -1,57 +1,149 @@
 # Loonaro: Stealthy KVM-VMI Sandbox
 
-Loonaro is a specialized KVM virtualization wrapper designed for creating polymorphic, stealthy Windows 11 sandboxes with rapid spin-up and teardown capabilities.
-
-## Directory Structure
-
-*   `scripts/`: Management scripts for the VM lifecycle.
-    *   `setup.sh`: Creates a new polymorphic VM instance.
-    *   `teardown.sh`: Destroys and cleans up a VM instance.
-    *   `start.sh`: Starts a VM and optionally launches the GUI.
-*   `templates/`: XML definitions for the VMs.
-*   `config/`: Networks and system configurations.
-*   `vms/`: Runtime artifact storage (disk images, logs).
-
-## Prerequisites
-
-Before running Loonaro, ensure your system has the necessary KVM/QEMU and Libvirt dependencies installed.
-
-```bash
-# Core virtualization packages
-sudo apt-get update
-sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils virt-manager
-
-# AppArmor utilities (required for security bypass features in setup script)
-sudo apt-get install -y apparmor-utils
-
-# UEFI Firmware (OVMF) for Secure Boot support
-sudo apt-get install -y ovmf
-
-# TPM Emulator for Windows 11 support
-sudo apt-get install -y swtpm swtpm-tools
-```
+Polymorphic VM orchestration with KVM-VMI introspection support.
 
 ## Quick Start
 
-### 1. Create a VM
-This script handles permissions, generates random hardware IDs, and configures Secure Boot.
 ```bash
-# Usage: sudo ./scripts/setup.sh <vm-name> [path-to-windows-iso]
-sudo ./scripts/setup.sh sandbox-001 /path/to/win11.iso
+# list templates
+./scripts/setup.sh --list
+
+# create vm
+./scripts/setup.sh win11 my-sandbox ~/Downloads/win11.iso
+
+# start vm
+./scripts/start.sh --gui my-sandbox
+
+# teardown
+./scripts/teardown.sh my-sandbox
 ```
 
-### 2. Start the VM
-Starts the domain and launches `virt-viewer`.
-```bash
-sudo ./scripts/start.sh --gui sandbox-001
+## Directory Structure
+
+```
+loonaro/
+├── scripts/        # setup.sh, start.sh, teardown.sh
+├── templates/      # VM definitions (.xml + .json pairs)
+├── config/         # network configs
+└── vms/            # runtime artifacts (disks, logs)
 ```
 
-### 3. Teardown
-Destroys the VM, removes the disk image, and undefines the domain/NVRAM.
+## Templates
+
+Each template requires **two files** in `templates/`:
+
+| File | Purpose |
+|------|---------|
+| `<name>.xml` | Libvirt VM definition |
+| `<name>.json` | Volatility IST (kernel symbols for introspection) |
+
+### Adding a New Template
+
+1. **Create XML**: Copy `win11.xml` → `<name>.xml`, edit as needed
+2. **Create JSON Profile**: See [Creating JSON Profiles](#creating-json-profiles)
+3. **Run**: `./scripts/setup.sh <name> my-vm /path/to/iso`
+
+---
+
+### Building LibVMI
+
 ```bash
-sudo ./scripts/teardown.sh sandbox-001
+cd kvm-vmi/libvmi
+mkdir -p build && cd build
+
+# Release build
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local \
+  -DENABLE_KVM=ON -DENABLE_XEN=OFF -DENABLE_BAREFLANK=OFF
+
+# OR Debug build (verbose output)
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local \
+  -DENABLE_KVM=ON -DENABLE_XEN=OFF -DENABLE_BAREFLANK=OFF \
+  -DVMI_DEBUG=0xFFFF -DENV_DEBUG=ON
+
+make -j$(nproc)
+sudo make install && sudo ldconfig
 ```
 
-## Requirements
-*   Ubuntu 20.04+ (Tested on 24.04 Noble)
-*   Sudo/Root privileges required for Libvirt interactions.
+---
+
+## Creating JSON Profiles
+
+JSON profiles contain Windows kernel symbols needed for introspection.
+
+### Step 1: Get Kernel PDB Info
+
+With the VM running:
+
+```bash
+# vmi-win-guid is built from kvm-vmi/libvmi/build/examples/
+sudo kvm-vmi/libvmi/build/examples/vmi-win-guid name <vm> /tmp/introspector
+```
+
+Output:
+```
+Windows Kernel found @ 0x37200000
+        PDB GUID: 910543a562cd3d9a19a2d8b087da182f1
+        Kernel filename: ntkrla57.pdb
+```
+
+### Step 2: Download and Convert PDB
+
+```bash
+# install volatility3 if not already installed
+pip install volatility3 pefile
+
+# find pdbconv.py location
+PDBCONV=$(python3 -c "import volatility3; print(volatility3.__path__[0])")/framework/symbols/windows/pdbconv.py
+
+# convert PDB to JSON (downloads from Microsoft symbol server)
+python3 $PDBCONV -p <kernel-filename> -g <pdb-guid> -o loonaro/templates/<name>.json
+
+# Example:
+# python3 $PDBCONV -p ntkrla57.pdb -g 910543a562cd3d9a19a2d8b087da182f1 -o loonaro/templates/win11.json
+```
+
+**Note**: JSON files are 5-15MB. Same file works for all VMs with identical Windows version.
+
+---
+
+## Scripts
+
+| Script | Description |
+|--------|-------------|
+| `setup.sh <template> [name] [iso]` | Creates VM with random UUID/MAC/Serial, copies JSON profile |
+| `start.sh [--gui] <name>` | Starts VM, optionally opens viewer |
+| `teardown.sh <name>` | Destroys VM, removes disk, cleans up JSON |
+
+---
+
+## Running Introspection Apps
+
+```bash
+# Process listing (requires JSON profile)
+sudo kvm-vmi/libvmi/build/examples/vmi-process-list \
+  -n <vm> -s /tmp/introspector -j /var/lib/libvmi/<vm>.json
+
+# With debug output
+sudo LIBVMI_DEBUG=1 kvm-vmi/libvmi/build/examples/vmi-process-list \
+  -n <vm> -s /tmp/introspector -j /var/lib/libvmi/<vm>.json
+```
+
+### Custom Apps
+
+Build custom apps in `apps/`:
+
+```bash
+cd apps && make
+sudo ./vmi-process-list -n <vm> -s /tmp/introspector -j /var/lib/libvmi/<vm>.json
+```
+
+---
+
+## Prerequisites
+
+```bash
+sudo apt install -y qemu-kvm libvirt-daemon-system libvirt-clients \
+  bridge-utils virt-manager apparmor-utils ovmf swtpm swtpm-tools
+```
+
+
