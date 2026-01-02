@@ -68,25 +68,39 @@ sudo make install && sudo ldconfig
 
 ## Creating JSON Profiles
 
-JSON profiles contain Windows kernel symbols needed for introspection.
+JSON profiles contain Windows kernel symbols needed for introspection. **The profile must match the exact kernel version running in the VM** - if Windows updates, you need to regenerate it.
 
 ### Step 1: Get Kernel PDB Info
 
-With the VM running:
+With the VM running and idle:
 
 ```bash
-# vmi-win-guid is built from kvm-vmi/libvmi/build/examples/
+# vmi-win-guid outputs kernel GUID and filename
 sudo kvm-vmi/libvmi/build/examples/vmi-win-guid name <vm> /tmp/introspector
 ```
 
-Output:
+Example output:
 ```
-Windows Kernel found @ 0x37200000
-        PDB GUID: 910543a562cd3d9a19a2d8b087da182f1
-        Kernel filename: ntkrla57.pdb
+Windows Kernel found @ 0x100200000
+        Version: 64-bit Windows 10
+        PDB GUID: 0762cf42ef7f3e8116ef7329adaa09a31
+        Kernel filename: ntkrnlmp.pdb
 ```
 
-### Step 2: Download and Convert PDB
+> **Note**: The GUID has a trailing `1` (age) - remove it for the download URL.
+> `0762cf42ef7f3e8116ef7329adaa09a31` → `0762CF42EF7F3E8116EF7329ADAA09A3`
+
+### Step 2: Download PDB from Microsoft Symbol Server
+
+```bash
+# format: uppercase GUID without the trailing '1'
+wget "https://msdl.microsoft.com/download/symbols/<filename>/<GUID>/<filename>" -O /tmp/<filename>
+
+# example for Windows 11 25H2:
+wget "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/0762CF42EF7F3E8116EF7329ADAA09A3/ntkrnlmp.pdb" -O /tmp/ntkrnlmp.pdb
+```
+
+### Step 3: Convert PDB to JSON
 
 ```bash
 # install volatility3 if not already installed
@@ -95,16 +109,30 @@ pip install volatility3 pefile
 # find pdbconv.py location
 PDBCONV=$(python3 -c "import volatility3; print(volatility3.__path__[0])")/framework/symbols/windows/pdbconv.py
 
-# convert PDB to JSON (downloads from Microsoft symbol server)
-python3 $PDBCONV -p <kernel-filename> -g <pdb-guid> -o loonaro/templates/<name>.json
-
-# Example:
-# python3 $PDBCONV -p ntkrla57.pdb -g 910543a562cd3d9a19a2d8b087da182f1 -o loonaro/templates/win11.json
+python3 $PDBCONV -f /tmp/ntkrnlmp.pdb -o loonaro/vms/<vm>.json
 ```
 
-**Note**: JSON files are 5-15MB. Same file works for all VMs with identical Windows version.
+### Troubleshooting: "All KdDebuggerDataBlock search methods failed"
+
+This error means the JSON profile doesn't match the running kernel. Common causes:
+
+1. **Windows updated** - Regenerate the profile with the new GUID
+2. **Wrong GUID format** - Remove trailing `1`, use uppercase
+3. **VM not fully booted** - Wait for desktop to load before running vmi-win-guid
+
+Verify GUID match:
+```bash
+# check running kernel GUID
+sudo kvm-vmi/libvmi/build/examples/vmi-win-guid name <vm> /tmp/introspector | grep "PDB GUID"
+
+# check JSON profile GUID
+python3 -c "import json; print(json.load(open('loonaro/vms/<vm>.json'))['metadata']['windows']['pdb']['GUID'])"
+```
+
+**These GUIDs must match** (ignoring case and trailing age digit).
 
 ---
+
 
 ## Scripts
 
