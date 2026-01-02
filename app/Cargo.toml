@@ -1,0 +1,26 @@
+[package]
+name = "loonaro-vmi"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+libc = "0.2"
+anyhow = "1.0.100"
+
+[build-dependencies]
+bindgen = "0.71"
+pkg-config = "0.3"
+
+[[bin]]
+name = "process-list"
+path = "src/bin/process_list.rs"
+
+[profile.release]
+opt-level = "z"      # optimize for size
+lto = true           # link-time optimization
+codegen-units = 1    # single codegen unit for better optimization
+panic = "abort"      # abort on panic (smaller binary)
+strip = true         # strip symbols
