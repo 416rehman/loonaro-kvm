@@ -21,6 +21,18 @@ pub enum VmiError {
     
     #[error("Null pointer returned from LibVMI")]
     NullPointer,
+
+    #[error("Failed to pause/resume VM")]
+    VmControlFailed,
+    
+    #[error("Hook already exists at {0:#x}")]
+    HookExists(u64),
+    
+    #[error("Failed to set memory access for GFN {0:#x}")]
+    MemAccessFailed(u64),
+
+    #[error("Error: {0}")]
+    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, VmiError>;

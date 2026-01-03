@@ -15,18 +15,10 @@ fn main() {
     
     // generate bindings
     let mut builder = bindgen::Builder::default()
-        .header("/usr/local/include/libvmi/libvmi.h")
+        .header("headers/wrapper.h")
         .clang_arg("-I/usr/local/include")
         // add gcc headers for stddef.h
         .clang_arg("-I/usr/lib/gcc/x86_64-linux-gnu/13/include") 
-        .allowlist_function("vmi_.*")
-        .allowlist_type("vmi_.*")
-        .allowlist_type("status_t")
-        .allowlist_type("addr_t")
-        .allowlist_type("win_ver_t")
-        .allowlist_type("os_t")
-        .allowlist_type("access_context_t")
-        .allowlist_var("VMI_.*")
         .derive_debug(true)
         .derive_default(true);
     

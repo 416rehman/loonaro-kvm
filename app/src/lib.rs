@@ -11,3 +11,7 @@ pub mod ffi;
 pub mod vmi;
 pub mod error;
 pub mod os;
+pub mod hook;
+pub mod session;
+pub mod disasm;
+pub mod cli;

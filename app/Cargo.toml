@@ -9,14 +9,18 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 libc = "0.2"
 anyhow = "1.0.100"
+tokio = { version = "1.48.0", features = ["full"] }
+crossbeam-channel = "0.5.15"
+ctrlc = "3.5.1"
+iced-x86 = "1.21.0"
 
 [build-dependencies]
 bindgen = "0.71"
 pkg-config = "0.3"
 
 [[bin]]
-name = "process-list"
-path = "src/bin/process_list.rs"
+name = "loonaro"
+path = "src/main.rs"
 
 [profile.release]
 opt-level = "z"      # optimize for size
