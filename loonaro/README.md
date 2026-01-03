@@ -87,17 +87,14 @@ Windows Kernel found @ 0x100200000
         Kernel filename: ntkrnlmp.pdb
 ```
 
-> **Note**: The GUID has a trailing `1` (age) - remove it for the download URL.
-> `0762cf42ef7f3e8116ef7329adaa09a31` → `0762CF42EF7F3E8116EF7329ADAA09A3`
-
 ### Step 2: Download PDB from Microsoft Symbol Server
 
 ```bash
-# format: uppercase GUID without the trailing '1'
+# format: uppercase GUID
 wget "https://msdl.microsoft.com/download/symbols/<filename>/<GUID>/<filename>" -O /tmp/<filename>
 
 # example for Windows 11 25H2:
-wget "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/0762CF42EF7F3E8116EF7329ADAA09A3/ntkrnlmp.pdb" -O /tmp/ntkrnlmp.pdb
+wget "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/0762CF42EF7F3E8116EF7329ADAA09A31/ntkrnlmp.pdb" -O /tmp/ntkrnlmp.pdb
 ```
 
 ### Step 3: Convert PDB to JSON
