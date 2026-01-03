@@ -15,10 +15,10 @@
 //!
 //! anything else and the hook becomes one-shot (restore original, bail).
 
-use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, Register, OpKind};
+use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 
-use crate::ffi::{RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15};
 use crate::error::{Result, VmiError};
+use crate::ffi::{R10, R11, R12, R13, R14, R15, R8, R9, RAX, RBP, RBX, RCX, RDI, RDX, RSI, RSP};
 
 /// guest cpu mode - needed because x86 encoding differs between modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,11 @@ impl Bitness {
     /// convert from libvmi's vmi_get_address_width() return value
     pub fn from_address_width(width: u8) -> Self {
         // libvmi returns 4 for 32-bit, 8 for 64-bit (pointer size in bytes)
-        if width == 8 { Bitness::Bits64 } else { Bitness::Bits32 }
+        if width == 8 {
+            Bitness::Bits64
+        } else {
+            Bitness::Bits32
+        }
     }
 }
 
@@ -52,13 +56,12 @@ pub enum EmulationStrategy {
         base_reg: u64,
         displacement: i64,
         len: u64,
+        /// 32 for dword ops, 64 for qword - we need this to pick correct write fn
+        operand_size_bits: u8,
     },
     /// push reg
     /// e.g. `push rbp` - classic prolog start
-    Push {
-        src_reg: u64,
-        len: u64,
-    },
+    Push { src_reg: u64, len: u64 },
     /// mov dst_reg, src_reg
     /// e.g. `mov rbp, rsp` - frame pointer setup
     MovRegReg {
@@ -68,11 +71,7 @@ pub enum EmulationStrategy {
     },
     /// sub reg, imm
     /// e.g. `sub rsp, 0x40` - stack allocation
-    SubImm {
-        reg: u64,
-        imm: u64,
-        len: u64,
-    },
+    SubImm { reg: u64, imm: u64, len: u64 },
     /// lea dst, [base + disp]
     /// e.g. `lea rbp, [rsp+0x20]` - another frame setup pattern
     Lea {
@@ -84,16 +83,23 @@ pub enum EmulationStrategy {
 }
 
 /// analyze first instruction at addr, returns emulation strategy if we can handle it
-pub fn analyze_instruction(code: &[u8], addr: u64, bitness: Bitness) -> Result<Option<EmulationStrategy>> {
+pub fn analyze_instruction(
+    code: &[u8],
+    addr: u64,
+    bitness: Bitness,
+) -> Result<Option<EmulationStrategy>> {
     if code.is_empty() {
         return Err(VmiError::Other("empty code buffer".into()));
     }
 
     let mut decoder = Decoder::with_ip(bitness.as_u32(), code, addr, DecoderOptions::NONE);
     let instr = decoder.decode();
-    
+
     if instr.is_invalid() {
-        return Err(VmiError::Other(format!("invalid instruction at {:#x}", addr)));
+        return Err(VmiError::Other(format!(
+            "invalid instruction at {:#x}",
+            addr
+        )));
     }
 
     let strategy = match instr.mnemonic() {
@@ -114,7 +120,7 @@ fn decode_push(instr: &Instruction) -> Option<EmulationStrategy> {
     }
 
     let vmi_reg = iced_reg_to_vmi(instr.op0_register())?;
-    
+
     Some(EmulationStrategy::Push {
         src_reg: vmi_reg,
         len: instr.len() as u64,
@@ -133,23 +139,34 @@ fn decode_mov(instr: &Instruction) -> Option<EmulationStrategy> {
         if instr.memory_index() != Register::None {
             return None;
         }
-        
+
         let vmi_src = iced_reg_to_vmi(instr.op1_register())?;
         let vmi_base = iced_reg_to_vmi(instr.memory_base())?;
-        
+
+        // calc operand size from memory operand - critical for picking write_32 vs write_64
+        let mem_size = instr.memory_size();
+        let operand_size_bits = match mem_size.size() {
+            1 => 8,
+            2 => 16,
+            4 => 32,
+            8 => 64,
+            _ => return None, // we still return None for vector/float sizes or weird stuff
+        };
+
         return Some(EmulationStrategy::MoveToMem {
             src_reg: vmi_src,
             base_reg: vmi_base,
             displacement: instr.memory_displacement64() as i64,
             len: instr.len() as u64,
+            operand_size_bits,
         });
     }
-    
+
     // mov reg, reg - frame pointer setup like mov rbp, rsp
     if instr.op0_kind() == OpKind::Register && instr.op1_kind() == OpKind::Register {
         let vmi_dst = iced_reg_to_vmi(instr.op0_register())?;
         let vmi_src = iced_reg_to_vmi(instr.op1_register())?;
-        
+
         return Some(EmulationStrategy::MovRegReg {
             dst_reg: vmi_dst,
             src_reg: vmi_src,
@@ -165,23 +182,23 @@ fn decode_sub_imm(instr: &Instruction) -> Option<EmulationStrategy> {
     if instr.op_count() != 2 {
         return None;
     }
-    
+
     // first op must be register, second must be immediate
     if instr.op0_kind() != OpKind::Register {
         return None;
     }
-    
+
     let imm = match instr.op1_kind() {
         OpKind::Immediate8 => instr.immediate8() as u64,
-        OpKind::Immediate8to32 => instr.immediate8to32() as i32 as u64,
+        OpKind::Immediate8to32 => instr.immediate8to32() as u64,
         OpKind::Immediate8to64 => instr.immediate8to64() as u64,
         OpKind::Immediate32 => instr.immediate32() as u64,
         OpKind::Immediate32to64 => instr.immediate32to64() as u64,
         _ => return None,
     };
-    
+
     let vmi_reg = iced_reg_to_vmi(instr.op0_register())?;
-    
+
     Some(EmulationStrategy::SubImm {
         reg: vmi_reg,
         imm,
@@ -194,19 +211,19 @@ fn decode_lea(instr: &Instruction) -> Option<EmulationStrategy> {
     if instr.op_count() != 2 {
         return None;
     }
-    
+
     if instr.op0_kind() != OpKind::Register || !matches!(instr.op1_kind(), OpKind::Memory) {
         return None;
     }
-    
+
     // no indexed addressing
     if instr.memory_index() != Register::None {
         return None;
     }
-    
+
     let vmi_dst = iced_reg_to_vmi(instr.op0_register())?;
     let vmi_base = iced_reg_to_vmi(instr.memory_base())?;
-    
+
     Some(EmulationStrategy::Lea {
         dst_reg: vmi_dst,
         base_reg: vmi_base,

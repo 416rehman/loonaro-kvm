@@ -1,6 +1,5 @@
 pub mod windows;
 
-
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: i32,
@@ -8,9 +7,9 @@ pub struct ProcessInfo {
     pub addr: u64,
 }
 
-use crate::vmi::Vmi;
-use crate::hook::HookManager;
 use crate::error::Result;
+use crate::hook::HookManager;
+use crate::vmi::Vmi;
 use std::sync::{Arc, Mutex};
 
 /// context passed to events for enabling/disabling
@@ -33,16 +32,19 @@ pub trait Event: Send {
 
 /// trait for OS abstractions
 pub trait Os {
-   fn new(vmi: Vmi) -> Self;
-   fn vmi(&self) -> &Vmi;
-   fn execute<A: Action<T>, T>(&self, action: A) -> Result<T> {
-       action.execute(self.vmi())
-   }
-   fn enable_event<E: Event>(&self, _event: &mut E) -> Result<()> {
-        Err(crate::error::VmiError::InitFailed("Os trait does not support events directly".into()))
-   }
-   fn disable_event<E: Event>(&self, _event: &mut E) -> Result<()> {
-       Err(crate::error::VmiError::InitFailed("Not implemented for Os trait".into()))
-   }
+    fn new(vmi: Vmi) -> Self;
+    fn vmi(&self) -> &Vmi;
+    fn execute<A: Action<T>, T>(&self, action: A) -> Result<T> {
+        action.execute(self.vmi())
+    }
+    fn enable_event<E: Event>(&self, _event: &mut E) -> Result<()> {
+        Err(crate::error::VmiError::InitFailed(
+            "Os trait does not support events directly".into(),
+        ))
+    }
+    fn disable_event<E: Event>(&self, _event: &mut E) -> Result<()> {
+        Err(crate::error::VmiError::InitFailed(
+            "Not implemented for Os trait".into(),
+        ))
+    }
 }
-

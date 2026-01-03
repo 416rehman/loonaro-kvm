@@ -1,11 +1,11 @@
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::vmi::Vmi;
-use crate::hook::HookManager;
 use crate::error::Result;
+use crate::hook::HookManager;
 use crate::os::{Event, EventContext};
+use crate::vmi::Vmi;
 
 pub struct Session {
     vmi: Arc<Mutex<Vmi>>,
@@ -58,7 +58,7 @@ impl Session {
                 }
             }
         });
-        
+
         // wait for event thread
         let _ = event_thread.join();
         Ok(())
@@ -80,7 +80,7 @@ impl Drop for Session {
         for event in &mut self.events {
             let _ = event.disable(&ctx);
         }
-        
+
         // explicit shutdown to restore hooks and fix Arc leak
         self.hooks.shutdown();
     }

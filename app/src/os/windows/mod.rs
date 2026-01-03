@@ -1,8 +1,7 @@
 use crate::vmi::Vmi;
 
-
-pub mod events;
 pub mod actions;
+pub mod events;
 
 use super::Os;
 
@@ -18,9 +17,8 @@ impl Os for WindowsOs {
     fn new(vmi: Vmi) -> Self {
         Self { vmi }
     }
-    
+
     fn vmi(&self) -> &Vmi {
         &self.vmi
     }
 }
-

@@ -10,7 +10,7 @@ mod commands;
 struct Cli {
     #[command(flatten)]
     vmi: VmiArgs,
-    
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -25,11 +25,11 @@ enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::ListProcesses => commands::list_processes::run(&cli.vmi)?,
         Commands::Monitor => commands::monitor::run(&cli.vmi)?,
     };
-    
+
     Ok(())
 }
