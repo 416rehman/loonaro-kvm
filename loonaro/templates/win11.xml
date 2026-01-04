@@ -96,7 +96,7 @@
       <listen type='address' address='0.0.0.0'/>
     </graphics>
     <video>
-      <model type='vga' vram='16384' heads='1' primary='yes'/>
+      <model type='none'/>
     </video>
     <tpm model='tpm-crb'>
       <backend type='emulator' version='2.0'/>
@@ -110,5 +110,9 @@
     <qemu:arg value='introspection,id=kvmi,chardev=chardev0'/>
     <qemu:arg value='-qmp'/>
     <qemu:arg value='unix:/tmp/qemu-monitor.sock,server,nowait'/>
+    <qemu:arg value='-object'/>
+    <qemu:arg value='memory-backend-file,id=vram_backend,size=16M,mem-path=/dev/shm/loonaro-shm-REPLACE_NAME,share=on'/>
+    <qemu:arg value='-device'/>
+    <qemu:arg value='VGA,id=video0,vgamem_mb=16,rombar=0'/>
   </qemu:commandline>
 </domain>
