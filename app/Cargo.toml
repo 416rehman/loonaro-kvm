@@ -20,9 +20,4 @@ pkg-config = "0.3"
 name = "loonaro"
 path = "src/main.rs"
 
-[profile.release]
-opt-level = "z"      # optimize for size
-lto = true           # link-time optimization
-codegen-units = 1    # single codegen unit for better optimization
-panic = "abort"      # abort on panic (smaller binary)
-strip = true         # strip symbols
+

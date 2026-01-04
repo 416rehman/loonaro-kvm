@@ -1,17 +1,66 @@
-// zero-latency webrtc presenter
-// uses MediaStreamTrackProcessor for direct frame access
+// LOONARO STREAM //
+// VOID TRANSMISSION UI //
 
+const container = document.getElementById('container');
 const canvas = document.getElementById('stream-canvas');
 const ctx = canvas.getContext('2d');
-const status = document.getElementById('status');
-const stats = document.getElementById('stats');
 
+// HUD
+const statusTextEl = document.getElementById('status-text');
+const statusDotEl = document.querySelector('.status-dot');
+const fpsEl = document.getElementById('hud-fps');
+
+// Overlay
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlay-title');
+const overlayDesc = document.getElementById('overlay-desc');
+
+// State
 let pc = null;
 let dc = null;
 let frameCount = 0;
 let lastStatsTime = performance.now();
+let lastFrameTime = performance.now();
+let isConnected = false;
 
-// Render frame to canvas
+// --- UI CONTROLLER ---
+
+function setOverlay(show, title, desc, type = 'loading') {
+    if (show) {
+        // Activate depth effect
+        container.classList.add('overlay-active');
+
+        // Show Overlay
+        overlay.classList.remove('hidden', 'loading', 'error', 'warning');
+        overlay.classList.add(type);
+
+        // Update Text
+        if (title) overlayTitle.innerText = title;
+        if (desc) overlayDesc.innerText = desc;
+
+        isConnected = false;
+        if (document.pointerLockElement) document.exitPointerLock();
+
+    } else {
+        // Deactivate depth effect
+        container.classList.remove('overlay-active');
+
+        // Hide Overlay
+        overlay.classList.add('hidden');
+
+        isConnected = true;
+        lastFrameTime = performance.now();
+    }
+}
+
+function updateHUDStatus(text, colorHex) {
+    statusTextEl.innerText = text;
+    statusDotEl.style.color = colorHex;
+    statusDotEl.style.boxShadow = `0 0 10px ${colorHex}`;
+}
+
+// --- RENDER LOOP ---
+
 function renderFrame(frame) {
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
         canvas.width = frame.displayWidth;
@@ -20,187 +69,144 @@ function renderFrame(frame) {
     ctx.drawImage(frame, 0, 0);
 }
 
-// Read frames from track
 async function readLoop(reader) {
-    console.log("Starting read loop");
     while (true) {
         try {
-            const result = await reader.read();
-            if (result.done) {
-                console.log("Read loop done");
-                break;
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+
+            if (frameCount === 0) {
+                // First frame: Immediate ready state
+                setOverlay(false);
+                updateHUDStatus('UPLINK_ESTABLISHED', '#fff');
             }
-            const frame = result.value;
-            if (!frame) continue;
 
-            // Log first frame and periodic frames
-            if (frameCount === 0) console.log("Received FIRST Frame:", frame.displayWidth, "x", frame.displayHeight, frame.timestamp);
-            if (frameCount % 60 === 0) console.log("Received Frame:", frameCount, frame.timestamp);
-
-            renderFrame(frame);
-            frame.close();
+            lastFrameTime = performance.now();
+            renderFrame(value);
+            value.close();
             frameCount++;
         } catch (e) {
-            console.error("Read loop error:", e);
+            console.error(e);
             break;
         }
     }
 }
 
-// Report WebRTC stats
-async function reportStats() {
-    if (!pc) return;
-    try {
-        const s = await pc.getStats();
-        s.forEach(report => {
-            if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                console.log("Stats:", {
-                    bytes: report.bytesReceived,
-                    decoded: report.framesDecoded,
-                    dropped: report.framesDropped,
-                    nack: report.nackCount,
-                    pli: report.pliCount,
-                    fps: report.framesPerSecond,
-                    packetsLost: report.packetsLost
-                });
-
-                if (dc && dc.readyState === 'open') {
-                    const msg = {
-                        type: 'stats',
-                        bytes: report.bytesReceived,
-                        decoded: report.framesDecoded,
-                        keyFrames: report.keyFramesDecoded,
-                        fps: report.framesPerSecond
-                    };
-                    dc.send(JSON.stringify(msg));
-                }
-            }
-        });
-    } catch (e) { console.error("Stats error", e); }
-}
-
-// Local stats updates
-function updateStats() {
+// Watchdog (200ms)
+setInterval(() => {
+    if (!isConnected) return;
     const now = performance.now();
-    const elapsed = (now - lastStatsTime) / 1000;
-    const fps = frameCount / elapsed;
-    stats.textContent = `${fps.toFixed(1)} fps`;
+    // 2000ms threshold
+    if (now - lastFrameTime > 2000) {
+        setOverlay(true, 'SIGNAL LOSS', 'UPLINK SIGNAL INTERRUPTED', 'warning');
+        updateHUDStatus('SIGNAL_LOST', '#ffbb33');
+    }
+}, 200);
+
+// Stats (1s)
+setInterval(() => {
+    const now = performance.now();
+    const fps = frameCount / ((now - lastStatsTime) / 1000);
+    fpsEl.innerText = fps.toFixed(0).padStart(2, '0');
     frameCount = 0;
     lastStatsTime = now;
+}, 1000);
 
-    // Check connection stats
-    reportStats().catch(console.error);
-}
-setInterval(updateStats, 1000);
 
-// Input handling
-function sendInput(event) {
-    if (dc && dc.readyState === 'open') {
-        dc.send(JSON.stringify(event));
+// --- WEBRTC CORE ---
+
+function checkState() {
+    if (!pc) return;
+    const ice = pc.iceConnectionState;
+    const cs = pc.connectionState;
+
+    if (ice === 'connected' || ice === 'completed') {
+        updateHUDStatus('SECURE_LINK', '#10b981');
+    } else if (ice === 'failed' || cs === 'failed') {
+        setOverlay(true, 'SYSTEM FAILURE', 'SECURE HANDSHAKE FAILED', 'error');
+        updateHUDStatus('FAILURE', '#ff4444');
+    } else if (ice === 'disconnected' || cs === 'disconnected') {
+        setOverlay(true, 'DISCONNECTED', 'REMOTE TERMINATED SESSION', 'warning');
+        updateHUDStatus('OFFLINE', '#ffbb33');
+    } else {
+        if (!isConnected) {
+            setOverlay(true, 'SYSTEM START', 'INITIALIZING SECURE UPLINK...', 'loading');
+            updateHUDStatus('BOOT_SEQUENCE', '#fff');
+        }
     }
 }
 
-// Pointer lock & listeners
-canvas.addEventListener('click', () => {
-    if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
-});
-
-canvas.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement === canvas) sendInput({ type: 'MouseMove', x: e.movementX, y: e.movementY });
-});
-
-canvas.addEventListener('mousedown', (e) => {
-    if (document.pointerLockElement === canvas) sendInput({ type: 'MouseButton', button: e.button, pressed: true });
-});
-
-canvas.addEventListener('mouseup', (e) => {
-    if (document.pointerLockElement === canvas) sendInput({ type: 'MouseButton', button: e.button, pressed: false });
-});
-
-window.addEventListener('keydown', (e) => {
-    if (document.pointerLockElement === canvas) {
-        e.preventDefault();
-        sendInput({ type: 'Keyboard', key: e.keyCode, pressed: true });
-    }
-});
-
-window.addEventListener('keyup', (e) => {
-    if (document.pointerLockElement === canvas) {
-        e.preventDefault();
-        sendInput({ type: 'Keyboard', key: e.keyCode, pressed: false });
-    }
-});
-
-// Start connection
 async function start() {
     try {
-        console.log('starting webrtc connection');
-        status.textContent = 'Connecting...';
+        setOverlay(true, 'SYSTEM START', 'INITIALIZING SECURE UPLINK...', 'loading');
+        updateHUDStatus('BOOT', '#fff');
 
-        pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
+        pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+        pc.oniceconnectionstatechange = checkState;
+        pc.onconnectionstatechange = checkState;
 
-        // Logging state changes
-        pc.onconnectionstatechange = () => console.log("pc connection state:", pc.connectionState);
-        pc.oniceconnectionstatechange = () => console.log("pc ice connection state:", pc.iceConnectionState);
-        pc.onicegatheringstatechange = () => console.log("pc ice gathering state:", pc.iceGatheringState);
-        pc.onsignalingstatechange = () => console.log("pc signaling state:", pc.signalingState);
-
-        // Data channel
         dc = pc.createDataChannel('input', { ordered: true });
-        dc.onopen = () => {
-            console.log('datachannel open');
-            status.textContent = 'Connected - Click to capture input';
+        // No logs on open/close, just State check and UI update
+        dc.onopen = () => checkState();
+        dc.onclose = () => {
+            setOverlay(true, 'CHANNEL LOST', 'INPUT SUBSYSTEM FAILED', 'warning');
         };
-        dc.onclose = () => console.log("datachannel closed");
-        dc.onerror = (e) => console.log("datachannel error:", e);
-        dc.onmessage = (e) => console.log("dc message:", e.data);
 
-        // Track handling
-        pc.ontrack = (event) => {
-            console.log('pc ontrack:', event.track.kind, event.track.id);
-            status.textContent = 'Video Track Received';
-
-            if (event.track.kind === 'video') {
-                event.track.onmute = () => console.log("track muted");
-                event.track.onunmute = () => console.log("track unmuted");
-
-                if (typeof MediaStreamTrackProcessor !== 'undefined') {
-                    const processor = new MediaStreamTrackProcessor({ track: event.track });
-                    const reader = processor.readable.getReader();
-                    readLoop(reader);
-                } else {
-                    console.error("MediaStreamTrackProcessor not supported!");
-                }
+        pc.ontrack = evt => {
+            if (evt.track.kind === 'video') {
+                updateHUDStatus('VIDEO_SYNC', '#3b82f6');
+                const processor = new MediaStreamTrackProcessor({ track: evt.track });
+                readLoop(processor.readable.getReader());
             }
         };
-
         pc.addTransceiver('video', { direction: 'recvonly' });
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const response = await fetch('/sdp', {
+        const res = await fetch('/sdp', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sdp: pc.localDescription.sdp, type: 'offer' })
+            body: JSON.stringify({ sdp: pc.localDescription.sdp, type: 'offer' }),
+            headers: { 'Content-Type': 'application/json' }
         });
 
-        if (!response.ok) throw new Error('Signaling failed');
+        if (!res.ok) throw new Error("SIGNAL_SERVER_UNREACHABLE");
 
-        const answer = await response.json();
-        console.log('received answer');
+        const ans = await res.json();
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: ans.sdp }));
 
-        await pc.setRemoteDescription(new RTCSessionDescription({
-            type: 'answer',
-            sdp: answer.sdp
-        }));
-
-    } catch (err) {
-        console.error(err);
-        status.textContent = 'Error: ' + err.message;
+    } catch (e) {
+        console.error(e); // Keep error logs for debugging
+        setOverlay(true, 'CRITICAL ERROR', e.message.toUpperCase(), 'error');
     }
 }
+
+// Input Helpers
+const sendInput = (e) => { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(e)); };
+
+canvas.addEventListener('click', () => {
+    if (!isConnected) return;
+    if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+
+// Event Listeners
+['mousemove', 'mousedown', 'mouseup'].forEach(evtType => {
+    canvas.addEventListener(evtType, e => {
+        if (!isConnected || document.pointerLockElement !== canvas) return;
+        const msg = { type: (evtType === 'mousemove' ? 'MouseMove' : 'MouseButton') };
+        if (evtType === 'mousemove') { msg.x = e.movementX; msg.y = e.movementY; }
+        else { msg.button = e.button; msg.pressed = (evtType === 'mousedown'); }
+        sendInput(msg);
+    });
+});
+
+['keydown', 'keyup'].forEach(evtType => {
+    window.addEventListener(evtType, e => {
+        if (!isConnected || document.pointerLockElement !== canvas) return;
+        e.preventDefault();
+        sendInput({ type: 'Keyboard', key: e.keyCode, pressed: (evtType === 'keydown') });
+    });
+});
 
 start();

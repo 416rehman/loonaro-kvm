@@ -1,6 +1,3 @@
-//! qmp input handling with buffered reader
-//! prevents race conditions from async qemu events
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -15,9 +12,6 @@ pub enum InputEvent {
     Keyboard { key: u32, pressed: bool },
 }
 
-
-
-/// QMP client with buffered reader
 pub struct QmpClient {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
@@ -30,12 +24,10 @@ impl QmpClient {
         let (read_half, mut writer) = stream.into_split();
         let mut reader = BufReader::new(read_half);
 
-        // read greeting
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         tracing::debug!("qmp greeting: {}", line.trim());
 
-        // capabilities negotiation
         let cmd = r#"{"execute":"qmp_capabilities"}"#;
         writer.write_all(cmd.as_bytes()).await?;
         writer.write_all(b"\n").await?;
@@ -44,20 +36,17 @@ impl QmpClient {
         reader.read_line(&mut line).await?;
         tracing::debug!("qmp caps response: {}", line.trim());
 
-        // Probe memory layout
         let cmd = r#"{"execute":"human-monitor-command","arguments":{"command-line":"info ramblock"}}"#;
         writer.write_all(cmd.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         
         line.clear();
-        // Read response (JSON wrapped string)
         reader.read_line(&mut line).await?;
         tracing::info!("QMP RAMBLOCKS: {}", line.trim());
 
         Ok(Self { reader, writer })
     }
 
-    /// execute command and wait for response
     async fn execute_command(&mut self, cmd: &str) -> Result<String> {
         self.writer.write_all(cmd.as_bytes()).await?;
         self.writer.write_all(b"\n").await?;
@@ -76,11 +65,9 @@ impl QmpClient {
         }
     }
 
-    /// send input-send-event to QEMU
     pub async fn send_input_event(&mut self, event: InputEvent) -> Result<()> {
         let cmd = match event {
             InputEvent::MouseMove { x, y } => {
-                // relative mouse movement
                 let events = serde_json::json!([
                     {"type": "rel", "data": {"axis": "x", "value": x}},
                     {"type": "rel", "data": {"axis": "y", "value": y}}
@@ -106,7 +93,6 @@ impl QmpClient {
                 })
             }
             InputEvent::Keyboard { key, pressed } => {
-                // use scancodes for PS/2 keyboard
                 if let Some(scancodes) = crate::scancodes::map_key(key) {
                     let seq = crate::scancodes::make_break(&scancodes, pressed);
                     let events: Vec<serde_json::Value> = seq

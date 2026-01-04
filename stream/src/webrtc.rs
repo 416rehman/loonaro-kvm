@@ -12,7 +12,9 @@ use str0m::change::SdpOffer;
 use str0m::media::{MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::rtp::{ExtensionValues, SeqNo};
-use str0m::{Event, Input, Output, Rtc, RtcConfig};
+use str0m::{Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
+use tokio::sync::Notify;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::capture::EncodedFrame;
 use crate::input::InputEvent;
@@ -27,6 +29,9 @@ pub struct Streamer {
     video_seq_no: Arc<Mutex<SeqNo>>,
     input_tx: Sender<InputEvent>,
     local_addr: SocketAddr,
+    notify_reset: Arc<Notify>,
+    is_active: Arc<AtomicBool>,
+    request_idr: Arc<AtomicBool>,
 }
 
 fn get_local_ip() -> Result<std::net::IpAddr> {
@@ -39,6 +44,8 @@ impl Streamer {
     pub fn new(
         frame_latch: Arc<arc_swap::ArcSwapOption<EncodedFrame>>,
         input_tx: Sender<InputEvent>,
+        is_active: Arc<AtomicBool>,
+        request_idr: Arc<AtomicBool>,
     ) -> Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.set_nonblocking(true)?;
@@ -61,16 +68,33 @@ impl Streamer {
             video_seq_no: Arc::new(Mutex::new(SeqNo::from(1))),
             input_tx,
             local_addr,
+            notify_reset: Arc::new(Notify::new()),
+            is_active,
+            request_idr,
         })
     }
 
     pub fn handle_offer(&self, offer_sdp: &str) -> Result<String> {
-        tracing::info!("handling offer sdp");
+        tracing::info!("handling offer sdp (resetting session)");
+        
         let mut rtc = self.rtc.lock().unwrap();
+
+        *rtc = RtcConfig::new().set_ice_lite(true).build();
+        
+        *self.video_mid.lock().unwrap() = None;
+        *self.video_seq_no.lock().unwrap() = SeqNo::from(1);
+        
+        self.is_active.store(false, Ordering::Release);
+
+        let mut trash = [0u8; 2000];
+        while let Ok(_) = self.socket.recv_from(&mut trash) {}
+        tracing::info!("flushed socket");
 
         let offer = SdpOffer::from_sdp_string(offer_sdp)?;
         rtc.add_local_candidate(str0m::Candidate::host(self.local_addr, "udp")?);
         let answer = rtc.sdp_api().accept_offer(offer)?;
+
+        self.notify_reset.notify_waiters();
 
         Ok(answer.to_sdp_string())
     }
@@ -112,6 +136,20 @@ impl Streamer {
                         }
                         Event::IceConnectionStateChange(state) => {
                             tracing::info!("ice state: {:?}", state);
+                            match state {
+                                IceConnectionState::Disconnected => {
+                                     self.is_active.store(false, Ordering::Release);
+                                },
+                                IceConnectionState::Connected | IceConnectionState::Completed => {
+                                     self.is_active.store(true, Ordering::Release);
+                                     self.request_idr.store(true, Ordering::Release);
+                                }
+                                _ => {}
+                            }
+                        }
+                        Event::KeyframeRequest(_) => {
+                             tracing::info!("keyframe requested by peer");
+                             self.request_idr.store(true, Ordering::Release);
                         }
                         _ => {}
                     },
@@ -239,8 +277,9 @@ impl Streamer {
         // rtc driver for NACK and timeout
         let rtc_clone = self_arc.rtc.clone();
         let socket_clone = self_arc.socket.clone();
+        let notify_reset = self_arc.notify_reset.clone();
         tokio::spawn(async move {
-            drive_rtc(rtc_clone, socket_clone).await;
+            drive_rtc(rtc_clone, socket_clone, notify_reset).await;
         });
 
         // latch poller
@@ -268,14 +307,6 @@ impl Streamer {
                         let media_time = (frame.frame_num * 1500) as u32;
                         self_arc.send_nals(&frame.nals, frame.timestamp, media_time);
                         last_processed = frame.frame_num;
-
-                        if frame.frame_num % 60 == 0 {
-                            tracing::info!(
-                                "streamer: sent frame {}, nals={}",
-                                frame.frame_num,
-                                frame.nals.len()
-                            );
-                        }
                     }
                 }
 
@@ -285,11 +316,14 @@ impl Streamer {
     }
 }
 
-async fn drive_rtc(rtc: Arc<Mutex<Rtc>>, socket: Arc<UdpSocket>) {
+async fn drive_rtc(rtc: Arc<Mutex<Rtc>>, socket: Arc<UdpSocket>, notify_reset: Arc<Notify>) {
     loop {
         if crate::is_shutdown() {
             break;
         }
+
+        // Notify reset check needs to interrupt sleeping
+        
         let maybe_timeout: Option<Instant> = {
             if let Ok(mut rtc_guard) = rtc.lock() {
                 let t = loop {
@@ -312,11 +346,22 @@ async fn drive_rtc(rtc: Arc<Mutex<Rtc>>, socket: Arc<UdpSocket>) {
             Some(timeout) => {
                 let now = Instant::now();
                 if timeout > now {
-                    tokio::time::sleep(timeout - now).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(timeout - now) => {},
+                        _ = notify_reset.notified() => {
+                            tracing::info!("rtc driver: reset triggered");
+                            continue; // instantly loop back to create new outputs
+                        }
+                    }
                 }
             }
             None => {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                    _ = notify_reset.notified() => {
+                         continue;
+                    }
+                }
                 continue;
             }
         }

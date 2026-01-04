@@ -43,11 +43,8 @@ impl VramPipeline {
 
         let buffer = vec![0u8; frame_size];
         
-        // Zero-init shadow
         let shadow = AVec::from_iter(64, vec![0u8; frame_size]);
         
-        // Initialize YUV to Black (Y=16, U=128, V=128)
-        // This prevents the "green flash" on startup if VRAM is empty
         let yuv = AVec::from_iter(64, {
              let mut b = vec![16u8; (width*height) as usize]; // Y plane
              b.extend(std::iter::repeat(128u8).take(yuv_size - b.len())); // UV planes
@@ -68,7 +65,6 @@ impl VramPipeline {
             tick_count: 0,
         };
         
-        // Verify VRAM access immediately
         pipeline.verify_vram()?;
         
         Ok(pipeline)
@@ -89,13 +85,10 @@ impl VramPipeline {
          Ok(())
     }
 
-    /// collapsed hot path: scrape -> diff -> yuv -> encode
-    pub fn process_frame(&mut self) -> Option<EncodedFrame> {
-        // Increment tick at start (time always moves forward)
+    pub fn process_frame(&mut self, force_idr_req: bool) -> Option<EncodedFrame> {
         let current_tick = self.tick_count;
         self.tick_count += 1;
 
-        // Scrape
         let len = self.buffer.len();
         {
             let mut local_iov = [IoSliceMut::new(&mut self.buffer)];
@@ -110,16 +103,10 @@ impl VramPipeline {
                  }
                  return None;
             }
-        } // drop mutable borrow
+        }
 
         let vram = &self.buffer;
         let shadow = self.shadow.as_slice();
-
-        if current_tick % 120 == 0 {
-             if let Some(pos) = vram.iter().position(|&b| b != 0) {
-                 tracing::debug!("VRAM active. Sample: {:?}", &vram[pos..pos+8.min(vram.len()-pos)]);
-             }
-        }
 
         let mut changed = true;
         let header_size = 256.min(vram.len());
@@ -130,8 +117,7 @@ impl VramPipeline {
             }
         }
 
-        // Heartbeat: 1s
-        if !changed {
+        if !changed && !force_idr_req {
             if current_tick % 60 != 0 {
                 return None;
             }
@@ -142,11 +128,7 @@ impl VramPipeline {
              self.shadow.as_mut_slice().copy_from_slice(vram);
         }
 
-        let force_idr = current_tick % 60 == 0;
-        
-        if force_idr || changed {
-             tracing::debug!("encoding frame {} (changed={}, IDR={})", current_tick, changed, force_idr);
-        }
+        let force_idr = force_idr_req || (current_tick % 60 == 0);
 
         let nals = match self.encoder.encode(&self.yuv, force_idr) {
             Ok(n) => n,
@@ -210,6 +192,8 @@ pub fn run_pipeline_loop<F>(
     height: u32,
     latch: Arc<arc_swap::ArcSwapOption<EncodedFrame>>,
     is_shutdown: F,
+    is_active: Arc<std::sync::atomic::AtomicBool>,
+    request_idr: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> 
 where
     F: Fn() -> bool,
@@ -220,6 +204,12 @@ where
     let interval = Duration::from_micros(16666); // 60 FPS
 
     loop {
+        if !is_active.load(std::sync::atomic::Ordering::Relaxed) {
+             if is_shutdown() { break; }
+             std::thread::sleep(Duration::from_millis(100));
+             continue;
+        }
+
         let frame_start = Instant::now();
 
         if is_shutdown() {
@@ -227,12 +217,18 @@ where
             break;
         }
 
-        if let Some(encoded) = pipeline.process_frame() {
+        let mut force_idr = false;
+        if request_idr.swap(false, std::sync::atomic::Ordering::Relaxed) {
+             tracing::info!("forcing IDR frame due to request");
+             force_idr = true;
+        }
+
+        if let Some(encoded) = pipeline.process_frame(force_idr) {
             // Atomic store - instant update, no channel blocking
             latch.store(Some(Arc::new(encoded)));
         }
 
-        // Precise sleep for frame pacing (no random jitter)
+        // Precise sleep for frame pacing
         if let Some(sleep_time) = interval.checked_sub(frame_start.elapsed()) {
             spin_sleep::sleep(sleep_time);
         }
@@ -241,15 +237,14 @@ where
     Ok(())
 }
 
-pub fn find_vram_hva(pid: i32, domain: &str, size: usize) -> Vec<usize> {
+pub fn find_vram_hva(pid: i32, size: usize) -> Vec<usize> {
     let mut candidates = Vec::new();
     let maps_path = format!("/proc/{}/maps", pid);
     
     if let Ok(file) = std::fs::File::open(&maps_path) {
         let reader = std::io::BufReader::new(file);
-        let specific_name = format!("loonaro-vram-{}", domain);
         
-        tracing::info!("scanning maps for region '{}' or size {}", specific_name, size);
+        tracing::info!("scanning maps for size {}", size);
 
         for line in std::io::BufRead::lines(reader) {
             if let Ok(line) = line {
@@ -262,14 +257,6 @@ pub fn find_vram_hva(pid: i32, domain: &str, size: usize) -> Vec<usize> {
                 if let (Ok(start), Ok(end)) = (usize::from_str_radix(range_parts[0], 16), usize::from_str_radix(range_parts[1], 16)) {
                     let region_size = end - start;
                     
-                    // Priority 1: Named match
-                    if line.contains(&specific_name) {
-                        tracing::info!("found candidate (named): 0x{:x}", start);
-                        candidates.push(start);
-                        continue;
-                    }
-
-                    // Priority 2: Size match (rw-s or rw-p)
                     if region_size == size {
                          if parts.len() > 1 && (parts[1].starts_with("rw-s") || parts[1].starts_with("rw-p")) {
                              tracing::info!("found candidate (size match {}): 0x{:x}", parts[1], start);

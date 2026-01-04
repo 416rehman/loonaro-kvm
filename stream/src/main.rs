@@ -30,7 +30,6 @@ struct Args {
     qmp_socket: String,
 }
 
-/// global shutdown flag with acquire/release ordering
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 pub fn is_shutdown() -> bool {
@@ -41,7 +40,6 @@ pub fn signal_shutdown() {
     SHUTDOWN.store(true, Ordering::Release);
 }
 
-// Single-thread tokio runtime for predictable latency
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -106,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let pid = find_qemu_pid(&domain).ok_or_else(|| anyhow::anyhow!("QEMU process not found for domain {}", domain))?;
     
     let vram_size = input_handler.query_vram_size().await?;
-    let candidates = capture::find_vram_hva(pid, &domain, vram_size);
+    let candidates = capture::find_vram_hva(pid, vram_size);
     if candidates.is_empty() {
         anyhow::bail!("No VRAM candidates found for size {} bytes", vram_size);
     }
@@ -124,25 +122,32 @@ async fn main() -> anyhow::Result<()> {
     
     if selected_hva == 0 {
         tracing::error!("All candidates failed verification (all zeros?). Defaulting to first candidate.");
-        selected_hva = capture::find_vram_hva(pid, &domain, vram_size)[0];
+        selected_hva = capture::find_vram_hva(pid, vram_size)[0];
     }
     
     tracing::info!("vram discovered: size={} bytes, hva=0x{:x}", vram_size, selected_hva);
 
-    let capture_thread = std::thread::spawn(move || {
-        unsafe {
-            let param = libc::sched_param { sched_priority: 80 };
-            libc::sched_setscheduler(0, libc::SCHED_RR, &param);
-        }
+    let is_active = Arc::new(AtomicBool::new(false));
+    let request_idr = Arc::new(AtomicBool::new(false));
 
-        let shutdown_check = || crate::is_shutdown();
-        
-        if let Err(e) = capture::run_pipeline_loop(pid, selected_hva, width, height, latch_writer, shutdown_check) {
-            tracing::error!("pipeline error: {}", e);
+    let capture_thread = std::thread::spawn({
+        let is_active = is_active.clone();
+        let request_idr = request_idr.clone();
+        move || {
+            unsafe {
+                let param = libc::sched_param { sched_priority: 80 };
+                libc::sched_setscheduler(0, libc::SCHED_RR, &param);
+            }
+    
+            let shutdown_check = || crate::is_shutdown();
+            
+            if let Err(e) = capture::run_pipeline_loop(pid, selected_hva, width, height, latch_writer, shutdown_check, is_active, request_idr) {
+                tracing::error!("pipeline error: {}", e);
+            }
         }
     });
 
-    let streamer = Arc::new(webrtc::Streamer::new(frame_latch, input_tx)?);
+    let streamer = Arc::new(webrtc::Streamer::new(frame_latch, input_tx, is_active.clone(), request_idr.clone())?);
     
     let streamer_loop = streamer.clone();
     tokio::spawn(async move {
@@ -171,7 +176,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// RT-safe input loop
 fn input_loop_rt(
     rx: Receiver<input::InputEvent>, 
     qmp_tx: tokio::sync::mpsc::Sender<input::InputEvent>,

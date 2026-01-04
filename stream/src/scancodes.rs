@@ -1,6 +1,4 @@
 //! PS/2 Set 2 Scancode mapping
-//! This module converts Javascript/WebRTC key codes to PS/2 Set 2 scancodes.
-
 pub fn map_key(key: u32) -> Option<Vec<u8>> {
     match key {
         // Alpha (A-Z)
