@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loonaro Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0f;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            background: #111;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 60px rgba(0, 200, 255, 0.1);
+        }
+
+        #stream-canvas {
+            display: block;
+            cursor: none;
+        }
+
+        #status {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #0f0;
+            font-size: 12px;
+            font-family: monospace;
+            text-shadow: 0 0 4px #0f0;
+        }
+
+        #stats {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #0ff;
+            font-size: 11px;
+            font-family: monospace;
+            text-align: right;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <canvas id="stream-canvas" width="1920" height="1080"></canvas>
+        <div id="status">Connecting...</div>
+        <div id="stats"></div>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>

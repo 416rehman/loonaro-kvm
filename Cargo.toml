@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "app",
+    "stream"
+]
+resolver = "3"

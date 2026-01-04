@@ -22,3 +22,8 @@ tmp/
 # Secrets
 *.pem
 *.key
+
+# Dev
+.idea
+.vscode
+target

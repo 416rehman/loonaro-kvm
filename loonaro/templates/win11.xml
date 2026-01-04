@@ -92,7 +92,6 @@
     <console type='pty'>
       <target type='serial' port='0'/>
     </console>
-    <input type='tablet' bus='usb'/>
     <graphics type='vnc' port='-1' autoport='yes'>
       <listen type='address' address='0.0.0.0'/>
     </graphics>
@@ -109,5 +108,7 @@
     <qemu:arg value='socket,path=/tmp/introspector,id=chardev0,reconnect=10'/>
     <qemu:arg value='-object'/>
     <qemu:arg value='introspection,id=kvmi,chardev=chardev0'/>
+    <qemu:arg value='-qmp'/>
+    <qemu:arg value='unix:/tmp/qemu-monitor.sock,server,nowait'/>
   </qemu:commandline>
 </domain>
