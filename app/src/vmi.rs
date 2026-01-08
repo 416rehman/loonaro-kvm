@@ -279,6 +279,26 @@ impl Vmi {
         Ok(())
     }
 
+    pub unsafe fn write_va(
+        &self,
+        operand_size_bits: u8,
+        src_val: u64,
+        target: u64,
+    ) -> Result<()> {
+        match operand_size_bits {
+            8 => self.write_8_va(target, 0, src_val as u8),
+            16 => self.write_16_va(target, 0, src_val as u16),
+            32 => self.write_32_va(target, 0, src_val as u32),
+            64 => self.write_64_va(target, 0, src_val),
+            _ => {
+                return Err(VmiError::Other(format!(
+                    "unsupported operand size {}",
+                    operand_size_bits
+                )));
+            }
+        }
+    }
+
     /// translate kernel virtual to physical address
     pub fn v2p(&self, vaddr: u64) -> Result<u64> {
         let mut paddr: u64 = 0;
@@ -296,10 +316,80 @@ impl Vmi {
         if status != status_VMI_SUCCESS {
             return Err(VmiError::ReadFailed {
                 addr: paddr,
-                msg: "read_8_pa failed".into(),
+                msg: format!("read_8_pa failed for addr {:x}", paddr),
             });
         }
         Ok(val)
+    }
+    
+    /// write 8-bit value at physical address
+    pub fn write_8_pa(&self, paddr: u64, val: u8) -> Result<()> {
+        let ptr = &val as *const u8;
+        let status = unsafe { vmi_write_8_pa(self.handle, paddr, ptr as *mut u8) };
+        if status != status_VMI_SUCCESS {
+            return Err(VmiError::ReadFailed {
+                addr: paddr,
+                msg: format!("write_8_pa failed for addr {:x}", paddr),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn write_16_pa(&self, paddr: u64, val: u16) -> Result<()> {
+        let ptr = &val as *const u16;
+        let status = unsafe { vmi_write_16_pa(self.handle, paddr, ptr as *mut u16) };
+        if status != status_VMI_SUCCESS {
+            return Err(VmiError::ReadFailed {
+                addr: paddr,
+                msg: format!("write_16_pa failed for addr {:x}", paddr),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn write_32_pa(&self, paddr: u64, val: u32) -> Result<()> {
+        let ptr = &val as *const u32;
+        let status = unsafe { vmi_write_32_pa(self.handle, paddr, ptr as *mut u32) };
+        if status != status_VMI_SUCCESS {
+            return Err(VmiError::ReadFailed {
+                addr: paddr,
+                msg: format!("write_32_pa failed for addr {:x}", paddr),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn write_64_pa(&self, paddr: u64, val: u64) -> Result<()> {
+        let ptr = &val as *const u64;
+        let status = unsafe { vmi_write_64_pa(self.handle, paddr, ptr as *mut u64) };
+        if status != status_VMI_SUCCESS {
+            return Err(VmiError::ReadFailed {
+                addr: paddr,
+                msg: format!("write_64_pa failed for addr {:x}", paddr),
+            });
+        }
+        Ok(())
+    }
+    
+    pub unsafe fn write_pa(
+        &self,
+        operand_size_bits: u8,
+        src_val: u64,
+        target: u64,
+    ) -> Result<()> {
+        match operand_size_bits {
+            8 => self.write_8_pa(target, src_val as u8),
+            16 => self.write_16_pa(target, src_val as u16),
+            32 => self.write_32_pa(target, src_val as u32),
+            64 => self.write_64_pa(target, src_val),
+            _ => {
+                return Err(VmiError::Other(format!(
+                    "unsupported operand size {} for mem write {:x}",
+                    operand_size_bits,
+                    target
+                )));
+            }
+        }
     }
 
     /// read 16-bit memory at virtual address

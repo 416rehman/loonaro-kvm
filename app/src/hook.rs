@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::disasm::{self, EmulationStrategy};
 use crate::error::{Result, VmiError};
 use crate::ffi::{
-    event_response_t, vmi_event_t, vmi_instance_t, INT3, RIP, RSP,
-    VMI_EVENTS_VERSION, VMI_EVENT_RESPONSE_SET_REGISTERS,
+    INT3, RIP, RSP, VMI_EVENT_RESPONSE_SET_REGISTERS, VMI_EVENTS_VERSION, event_response_t,
+    vmi_event_t, vmi_instance_t,
 };
-use crate::vmi::{event_helpers, Vmi, VmiEvent};
+use crate::vmi::{Vmi, VmiEvent, event_helpers};
 
 /// context passed to hook callbacks
 pub struct HookContext<'a> {
@@ -202,6 +202,7 @@ impl HookManager {
         event: *mut vmi_event_t,
     ) -> event_response_t {
         unsafe {
+            // we let this reinject by default. we clear this later when we are sure this is our hook
             event_helpers::set_reinject(event, 1);
 
             let data = (*event).data as *const HookManager;
@@ -226,6 +227,7 @@ impl HookManager {
             let hook_data = state.hooks.get(&rip).map(|h| (h.addr, h.orig_byte));
 
             if let Some((addr, orig_byte)) = hook_data {
+                // if we are sure this is our hook, disable reinject
                 event_helpers::set_reinject(event, 0);
 
                 if let Some(hook) = state.hooks.get(&rip) {
@@ -250,19 +252,7 @@ impl HookManager {
                                     let src_val = vmi_events.get_vcpureg(*src_reg, vcpu_id)?;
                                     let base_val = vmi_events.get_vcpureg(*base_reg, vcpu_id)?;
                                     let target = base_val.wrapping_add(*displacement as u64);
-
-                                    match operand_size_bits {
-                                        8 => vmi_events.write_8_va(target, 0, src_val as u8)?,
-                                        16 => vmi_events.write_16_va(target, 0, src_val as u16)?,
-                                        32 => vmi_events.write_32_va(target, 0, src_val as u32)?,
-                                        64 => vmi_events.write_64_va(target, 0, src_val)?,
-                                        _ => {
-                                            return Err(VmiError::Other(format!(
-                                                "unsupported operand size {}",
-                                                operand_size_bits
-                                            )));
-                                        }
-                                    }
+                                    vmi_events.write_va(*operand_size_bits, src_val, target)?;
 
                                     (*event_helpers::get_x86_regs(event)).rip = rip + len;
                                     Ok(())
@@ -274,7 +264,6 @@ impl HookManager {
                                         e
                                     );
                                     let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                                    event_helpers::set_reinject(event, 1);
                                 } else {
                                     return VMI_EVENT_RESPONSE_SET_REGISTERS;
                                 }
@@ -296,7 +285,6 @@ impl HookManager {
                                         e
                                     );
                                     let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                                    event_helpers::set_reinject(event, 1);
                                 } else {
                                     return VMI_EVENT_RESPONSE_SET_REGISTERS;
                                 }
@@ -319,7 +307,6 @@ impl HookManager {
                                         e
                                     );
                                     let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                                    event_helpers::set_reinject(event, 1);
                                 } else {
                                     return VMI_EVENT_RESPONSE_SET_REGISTERS;
                                 }
@@ -342,7 +329,6 @@ impl HookManager {
                                         e
                                     );
                                     let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                                    event_helpers::set_reinject(event, 1);
                                 } else {
                                     return VMI_EVENT_RESPONSE_SET_REGISTERS;
                                 }
@@ -367,7 +353,6 @@ impl HookManager {
                                         e
                                     );
                                     let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                                    event_helpers::set_reinject(event, 1);
                                 } else {
                                     return VMI_EVENT_RESPONSE_SET_REGISTERS;
                                 }
@@ -375,11 +360,10 @@ impl HookManager {
                         }
                     } else {
                         eprintln!(
-                            "[HookManager] no emulation for {:#x}, removing hook (one-shot)",
+                            "[HookManager] ERROR!!!! no emulation for {:#x}, removing hook (one-shot)",
                             addr
                         );
                         let _ = vmi_events.write_8_va(addr, 0, orig_byte);
-                        event_helpers::set_reinject(event, 1);
                     }
                 }
             }
